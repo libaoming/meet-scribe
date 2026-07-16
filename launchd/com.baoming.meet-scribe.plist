@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.baoming.meet-scribe</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/baomingli/meet-scribe/bin/pipeline.sh</string>
+    <string>--scan</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>/Users/baomingli/Meetings/inbox</string>
+    <string>/Users/baomingli/Library/Mobile Documents/com~apple~CloudDocs/MeetInbox</string>
+  </array>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/baomingli/meet-scribe/work/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/baomingli/meet-scribe/work/launchd.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/baomingli/.local/bin</string>
+  </dict>
+</dict>
+</plist>

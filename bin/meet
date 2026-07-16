@@ -1,0 +1,52 @@
+#!/bin/bash
+# meet — 线下会议录音入口（入口 A）
+# 用法: meet start [标题]   开始录内置麦克风（16kHz mono m4a，后台）
+#       meet stop           结束录音，产物移入 ~/Meetings/inbox/（触发管线）
+#       meet status         当前是否在录
+set -euo pipefail
+
+INBOX="$HOME/Meetings/inbox"
+STATE_DIR="$HOME/.local/state/meet-scribe"
+PID_FILE="$STATE_DIR/rec.pid"
+META_FILE="$STATE_DIR/rec.meta"
+mkdir -p "$INBOX" "$STATE_DIR"
+
+case "${1:-}" in
+  start)
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "已在录音中（$(cat "$META_FILE" 2>/dev/null | head -1)）。先 meet stop。" >&2; exit 1
+    fi
+    title="${2:-会议}"
+    ts=$(date +%Y-%m-%d-%H%M)
+    out="$STATE_DIR/${ts}-${title}.m4a"
+    # :default = 系统默认输入设备（内置麦或外接麦）
+    nohup ffmpeg -v error -f avfoundation -i ":default" -ac 1 -ar 16000 -c:a aac -b:a 48k "$out" \
+      > "$STATE_DIR/ffmpeg.log" 2>&1 &
+    echo $! > "$PID_FILE"
+    printf '%s\n%s\n' "${ts}-${title}" "$out" > "$META_FILE"
+    sleep 1
+    if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "录音启动失败（常见原因：终端没有麦克风权限，去 系统设置→隐私与安全→麦克风 勾选）:" >&2
+      cat "$STATE_DIR/ffmpeg.log" >&2; rm -f "$PID_FILE" "$META_FILE"; exit 1
+    fi
+    echo "● 录音中: ${ts}-${title}  （结束: meet stop）"
+    ;;
+  stop)
+    [[ -f "$PID_FILE" ]] || { echo "当前没有在录音。" >&2; exit 1; }
+    pid=$(cat "$PID_FILE"); out=$(sed -n 2p "$META_FILE")
+    kill -INT "$pid" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    rm -f "$PID_FILE" "$META_FILE"
+    [[ -s "$out" ]] || { echo "录音文件为空: $out" >&2; exit 1; }
+    mv "$out" "$INBOX/"
+    echo "■ 已停止，送入管线: $INBOX/$(basename "$out")"
+    ;;
+  status)
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "● 录音中: $(head -1 "$META_FILE")"
+    else
+      echo "○ 未在录音"
+    fi
+    ;;
+  *) sed -n '2,5p' "$0"; exit 1 ;;
+esac

@@ -1,0 +1,12 @@
+# 模型权重不入库（~2.7G，来源 ModelScope，恢复见 README）；顶层 yaml 配置保留
+models/*/
+
+# python 虚拟环境（重建：uv venv venv --python 3.11 && uv pip install --python venv/bin/python whisperx）
+venv/
+
+# 运行时产物：真实会议转写 JSON / 日志（隐私，永不入库）
+work/
+
+.DS_Store
+*.log
+__pycache__/

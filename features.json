@@ -1,0 +1,225 @@
+{
+  "$schema_version": "0.1",
+  "milestone": "M1",
+  "project": "meet-scribe",
+  "updated": "2026-07-13",
+  "owner": "libaoming",
+  "convention": {
+    "status": [
+      "pending",
+      "in_progress",
+      "failing",
+      "passing"
+    ],
+    "default_status": "failing",
+    "rule": "verify 必须真正通过才能改 passing；单测通过只到 in_progress",
+    "verifier_gate": "verify 字段为空 = 不准开工（不能离开 pending）。每个目标必须带可衡量的成功信号（fixture/测试/基准/可复现 bug/E2E）——没有验证机制的目标只是许愿。",
+    "context_fields": "每个 feature 必须填 related/affected/out_of_scope，让 subagent 秒判'读哪些、不读哪些'，对治 context 膨胀（来自 OpenSpec Related Context 实践）"
+  },
+  "slices": {
+    "S1": {
+      "name": "meet CLI 录音入口 + fixture",
+      "exit_criteria": "meet start/stop 产出合格音频进 inbox；双说话人中文 fixture 存在且可播",
+      "git_tag": "meet-scribe-s1"
+    },
+    "S2": {
+      "name": "WhisperX 本地转写（不带分离）",
+      "exit_criteria": "fixture 经 whisperx 转出含关键词的中文转写 JSON",
+      "git_tag": "meet-scribe-s2"
+    },
+    "S3": {
+      "name": "说话人分离",
+      "exit_criteria": "转写 JSON 出现 ≥2 个 speaker 标签且关键句归属正确",
+      "git_tag": "meet-scribe-s3"
+    },
+    "S4": {
+      "name": "claude 纪要落 vault",
+      "exit_criteria": "fixture 逐字稿生成五段结构纪要 md 落 ~/ObsidianVault/meetings/",
+      "git_tag": "meet-scribe-s4"
+    },
+    "S5": {
+      "name": "launchd 自动化+通知+归档",
+      "exit_criteria": "cp fixture 进 inbox 后无人工干预 E2E_PASS",
+      "git_tag": "meet-scribe-s5"
+    },
+    "S6": {
+      "name": "iPhone iCloud 入口",
+      "exit_criteria": "iCloud MeetInbox 落文件后自动进管线；用户操作说明就位",
+      "git_tag": "meet-scribe-s6"
+    }
+  },
+  "features": [
+    {
+      "id": "F01_fixture_2spk",
+      "slice": "S1",
+      "status": "passing",
+      "verify": {
+        "type": "cmd",
+        "cmd": "test -f fixtures/meeting-2spk.wav && ffprobe -v error -show_entries format=duration -of csv=p=0 fixtures/meeting-2spk.wav | awk '{exit !($1>20)}' && echo PASS"
+      },
+      "verify_notes": "2026-07-13 PASS：gen_fixture.sh 产出 42.57s，say 双音色（Tingting/Meijia）+句间0.8s静音",
+      "related": {
+        "specs": [
+          "SPEC·测试策略"
+        ],
+        "code": [
+          "fixtures/"
+        ],
+        "docs": [
+          "PRD·验收标准"
+        ]
+      },
+      "affected": "全链路回归的输入源",
+      "out_of_scope": "真实录音（后补第二个 fixture）",
+      "blocking": [
+        "F03_transcribe",
+        "F06_pipeline_e2e"
+      ]
+    },
+    {
+      "id": "F02_meet_cli",
+      "slice": "S1",
+      "status": "passing",
+      "verify": {
+        "type": "cmd",
+        "cmd": "bin/meet start 自检 && sleep 3 && bin/meet stop && f=$(ls -t ~/Meetings/inbox/*自检* | head -1) && ffprobe -v error -show_entries format=duration -of csv=p=0 \"$f\" | awk '{exit !($1>=2)}' && echo PASS"
+      },
+      "verify_notes": "2026-07-13 PASS：真麦克风录 3s，ffprobe 时长 2.99s，产物落 inbox",
+      "related": {
+        "specs": [
+          "SPEC·接口/录音"
+        ],
+        "code": [
+          "bin/meet"
+        ],
+        "docs": []
+      },
+      "affected": "入口 A；inbox 产生文件",
+      "out_of_scope": "系统音频捕捉、线上会议",
+      "blocking": []
+    },
+    {
+      "id": "F03_transcribe",
+      "slice": "S2",
+      "status": "passing",
+      "verify": {
+        "type": "cmd",
+        "cmd": "bin/pipeline.sh --transcribe-only fixtures/meeting-2spk.wav && grep -q '下周三' work/meeting-2spk.json && echo PASS"
+      },
+      "verify_notes": "2026-07-13 PASS：本地 CT2 模型（ModelScope 固化）转写 46.3s fixture，'下周三' 命中；耗时约 1 分钟(CPU int8)",
+      "related": {
+        "specs": [
+          "SPEC·环境契约"
+        ],
+        "code": [
+          "bin/pipeline.sh",
+          "venv/"
+        ],
+        "docs": [
+          "architecture·数据流"
+        ]
+      },
+      "affected": "转写 JSON 产出",
+      "out_of_scope": "说话人分离（S3）、纪要（S4）",
+      "blocking": [
+        "F04_diarize",
+        "F05_minutes"
+      ]
+    },
+    {
+      "id": "F04_diarize",
+      "slice": "S3",
+      "status": "passing",
+      "verify": {
+        "type": "cmd",
+        "cmd": "bin/pipeline.sh --transcribe-only fixtures/meeting-2spk.wav && python3 -c \"import json;d=json.load(open('work/meeting-2spk.json'));s={seg.get('speaker') for seg in d['segments']};print('PASS' if len([x for x in s if x])>=2 else 'FAIL')\" | grep -q PASS && echo PASS"
+      },
+      "verify_notes": "2026-07-13 PASS：community-1(VBx+PLDA) 分出 SPEAKER_00/01；前提=fixture 说话人B变调-4半音（同性 TTS 音色会被聚成一人）；无需 HF token",
+      "related": {
+        "specs": [
+          "SPEC·数据模型/中间产物"
+        ],
+        "code": [
+          "bin/pipeline.sh"
+        ],
+        "docs": [
+          "PRD·D6"
+        ]
+      },
+      "affected": "转写 JSON 的 speaker 字段",
+      "out_of_scope": "声纹自动认人",
+      "blocking": []
+    },
+    {
+      "id": "F05_minutes",
+      "slice": "S4",
+      "status": "passing",
+      "verify": {
+        "type": "cmd",
+        "cmd": "bin/pipeline.sh --minutes-only work/meeting-2spk.json && f=~/ObsidianVault/meetings/$(date +%F)-meeting-2spk.md && test -f $f && grep -q '待办' $f && grep -q '关键结论' $f && echo PASS"
+      },
+      "verify_notes": "2026-07-13 PASS：claude -p (sonnet) 生成五段纪要落 vault，待办含责任人+截止，说话人角色推测正确",
+      "related": {
+        "specs": [
+          "SPEC·纪要 md 结构"
+        ],
+        "code": [
+          "prompts/minutes.md",
+          "bin/pipeline.sh"
+        ],
+        "docs": []
+      },
+      "affected": "vault 落盘",
+      "out_of_scope": "通知/归档（S5）",
+      "blocking": []
+    },
+    {
+      "id": "F06_pipeline_e2e",
+      "slice": "S5",
+      "status": "passing",
+      "verify": {
+        "type": "cmd",
+        "cmd": "cp fixtures/meeting-2spk.wav ~/Meetings/inbox/e2e-test.wav && until 纪要出现（最长10min）; 判定: test -f vault md && grep 待办/说话人 && test -f archive/e2e-test.wav && inbox 已清空 && echo E2E_PASS"
+      },
+      "verify_notes": "2026-07-13 E2E_PASS：launchd WatchPaths 触发，无人工干预 20:55 投放→纪要落 vault+归档+通知+自动打开；turn 级说话人归属 6/6 正确",
+      "related": {
+        "specs": [
+          "SPEC·目录契约",
+          "SPEC·关键约束2-5"
+        ],
+        "code": [
+          "bin/pipeline.sh",
+          "launchd plist"
+        ],
+        "docs": []
+      },
+      "affected": "launchd 触发、通知、归档、error 隔离",
+      "out_of_scope": "iPhone 侧",
+      "blocking": []
+    },
+    {
+      "id": "F07_icloud_inbox",
+      "slice": "S6",
+      "status": "pending",
+      "verify": {
+        "type": "cmd",
+        "cmd": "cp fixtures/meeting-2spk.wav ~/Library/Mobile\\ Documents/com~apple~CloudDocs/MeetInbox/ 后 E2E_PASS（同 F06 口径）"
+      },
+      "verify_notes": "",
+      "related": {
+        "specs": [
+          "SPEC·目录契约"
+        ],
+        "code": [
+          "launchd plist"
+        ],
+        "docs": [
+          "用户操作说明"
+        ]
+      },
+      "affected": "入口 B 接线",
+      "out_of_scope": "iPhone 快捷指令自动化",
+      "blocking": []
+    }
+  ]
+}
