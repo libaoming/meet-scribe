@@ -1,30 +1,80 @@
 # meet-scribe
 
-线下会议自动纪要管线：录音 → WhisperX 本地转写 + pyannote 说话人分离 → `claude -p` 生成纪要 → 落 Obsidian vault。全链路本地/免费，launchd 无人值守。
+> 🌏 **English** | [中文](README.zh-CN.md)
 
-## 用法
+Automatic meeting minutes for offline (in-person) meetings: record → local WhisperX transcription + pyannote speaker diarization → `claude -p` generates structured minutes → saved to your Obsidian vault. Fully local models, zero marginal cost, unattended via launchd.
 
-- **Mac 在场**：`bin/meet start 会议名` 开录，`bin/meet stop` 停止，之后全自动。
-- **iPhone**：语音备忘录录音 →「存储到文件」→ iCloud Drive/MeetInbox（配置见 `docs/iphone-setup.md`）。
+- **No cloud ASR** — Whisper large-v3-turbo (CT2) and pyannote community-1 run locally; audio never leaves your machine.
+- **No daemon, no database** — directories are the state machine (`inbox/processing/archive/error`), launchd `WatchPaths` is the trigger.
+- **Single seam** — launchd, CLI, and manual runs all converge on `bin/pipeline.sh`; one command to verify everything.
 
-文件落盘 `~/Meetings/inbox/` 即触发管线，纪要落 `~/ObsidianVault/meetings/`，完成后系统通知。
+## Full call chain
 
-## 架构
+Every step is marked `[auto]` (machine) or `👤` (human).
 
-见 `docs/architecture.md`（完整调用链路图）。核心原则：触发靠文件落盘、目录即状态机（inbox/processing/archive/error）、单接缝 `bin/pipeline.sh`。
+```
+Entry A · Mac present                 Entry B · iPhone (primary)
+┌───────────────────────┐            ┌────────────────────────────┐
+│ 👤 meet start <title>  │            │ 👤 Voice Memos: record      │
+│ [auto] ffmpeg records  │            │ 👤 Save to Files →          │
+│        built-in mic    │            │    iCloud Drive/MeetInbox  │
+│ 👤 meet stop           │            │ [auto] iCloud sync to Mac  │
+└──────────┬────────────┘            └─────────────┬──────────────┘
+           │ [auto] mv                             │
+           ▼                                       ▼
+┌──────────────────────────────────────────────────────────┐
+│ ~/Meetings/inbox/   ◀── [auto] launchd WatchPaths fires  │
+└───────────────────────────┬──────────────────────────────┘
+                            ▼  [auto] wait until file size is stable,
+                            │         then mv to processing/ (atomic, no double-run)
+┌──────────────────────────────────────────────────────────┐
+│ bin/pipeline.sh                                          │
+│ ① [auto] ffmpeg → 16 kHz mono wav                        │
+│ ② [auto] whisperx (project venv, local models/)          │
+│          zh transcription + pyannote diarization          │
+│          → word-level speaker turns → JSON                │
+│ ③ [auto] fill prompts/minutes.md → claude -p → minutes   │
+│ ④ [auto] write ~/ObsidianVault/meetings/ + archive audio │
+└───────┬──────────────────────────────┬───────────────────┘
+        ▼ success                      ▼ failure
+[auto] macOS notification       [auto] move to error/ + log
+       + open the minutes              + failure notification
+        │
+        ▼
+👤 Read, correct speaker names, act on TODOs
+```
 
-## 换机恢复（models/ 与 venv/ 不入库）
+**Where humans are irreplaceable:**
 
-1. **venv**：`uv venv venv --python 3.11 && uv pip install --python venv/bin/python whisperx`
-2. **模型**（全部从 **ModelScope** 下载，hf-mirror 已失效、HF 直连不通，别走 HF 路线）：
-   - `models/faster-whisper-large-v3-turbo/` ← ModelScope `pengzhendong/faster-whisper-large-v3-turbo`（1.5G）
-   - `models/community-1/` ← pyannote community-1 整仓（含 `plda/plda.npz`，无需 HF token）
-   - `models/wav2vec2-zh/` ← 中文词级对齐模型（1.2G）
-   - `models/segmentation-3.0/`、`models/wespeaker-voxceleb-resnet34-LM/` ← pyannote 依赖权重
-   - `models/*.yaml`（diarization 本地路径配置）已入库，无需重建
-3. **自检**：`M1/init.sh` 走一遍，FAIL=0 即可开工。
-4. **launchd**：`launchd/com.baoming.meet-scribe.plist` 装载到 `~/Library/LaunchAgents/`。
+| Step | Why the machine can't do it |
+|---|---|
+| Start/stop recording, name the meeting | Only you know a meeting is happening and what it's about |
+| Review minutes, fix speaker labels | Diarization gives `[Speaker 1]`; mapping to real names needs context |
+| Act on the TODO list | The pipeline extracts action items; execution is yours |
 
-## 项目状态
+## Usage
 
-harness 项目，进度见 `STATUS.md` / `features.json`；规格见 `docs/PRD.md`、`docs/SPEC.md`。
+- **Mac present**: `bin/meet start <title>` to record, `bin/meet stop` to finish — everything after is automatic.
+- **iPhone**: record with Voice Memos → "Save to Files" → iCloud Drive/MeetInbox (setup: `docs/iphone-setup.md`).
+
+Any audio file landing in `~/Meetings/inbox/` triggers the pipeline; minutes land in `~/ObsidianVault/meetings/` with a system notification when done.
+
+## Setup / restore (models/ and venv/ are not in the repo)
+
+1. **venv**: `uv venv venv --python 3.11 && uv pip install --python venv/bin/python whisperx`
+2. **Models** (all fetched from **ModelScope**; in mainland-China networks hf-mirror is dead and HF is unreachable — HuggingFace also works if you can reach it):
+   - `models/faster-whisper-large-v3-turbo/` ← ModelScope `pengzhendong/faster-whisper-large-v3-turbo` (1.5 GB)
+   - `models/community-1/` ← pyannote community-1, full repo incl. `plda/plda.npz` (no HF token needed)
+   - `models/wav2vec2-zh/` ← Chinese word-level alignment model (1.2 GB)
+   - `models/segmentation-3.0/`, `models/wespeaker-voxceleb-resnet34-LM/` ← pyannote dependency weights
+   - `models/*.yaml` (diarization local-path configs) are committed — no rebuild needed
+3. **Self-check**: run `M1/init.sh`; FAIL=0 means ready.
+4. **launchd**: load `launchd/com.baoming.meet-scribe.plist` into `~/Library/LaunchAgents/`.
+
+## Project status
+
+Built with the [harness methodology](https://github.com/libaoming/harness-kit): progress in `STATUS.md` / `features.json`; specs in `docs/PRD.md`, `docs/SPEC.md`, `docs/architecture.md` (Chinese).
+
+## License
+
+[MIT](LICENSE)
