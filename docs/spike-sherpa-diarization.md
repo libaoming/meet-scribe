@@ -18,8 +18,14 @@
 | 模型加载 | **0.09s** | 3.02s |
 | 运行时体积 | onnxruntime 28M + c-api 4.1M ≈ **32M** | torch **373M** + pyannote 3.6M + 依赖 |
 | 模型体积 | seg int8 1.5M + emb 38M ≈ **39.5M** | 31M |
-| **打包总增量** | **≈ 72M** | **≈ 410M+** |
-| Rust 绑定 | ✅ 官方 `rust-api-examples/run-offline-speaker-diarization.sh`；第三方 `sherpa-rs` 0.6.8（77k 下载）有 `examples/diarize.rs` | ❌ 只能 Python sidecar |
+| **打包总增量** | **≈ 98M**（见下方更正） | **≈ 410M+** |
+| Rust 绑定 | ✅ 已端到端验证，输出与 Python 版逐字节相同 | ❌ 只能 Python sidecar |
+
+> **📌 2026-08-11 更正**：本表最初写的打包增量是 72M，那是按 Python wheel 里的 onnxruntime
+> 28M 估的。实际在 Rust 侧编译后实测为 **98M**——`sherpa-rs 0.6.8` 绑的 onnxruntime 是
+> 1.17.1（49M），比 Python wheel 的 1.27.0 更老也更大，同时导致 Rust 版比 Python 版慢一倍
+> （11.8s vs 5.47s）。结论不变（对比 pyannote 仍有 4 倍优势），但数字以实测为准。
+> Rust 侧完整验证见 [mnemo/spikes/rust-diarize](https://github.com/libaoming/mnemo/tree/main/spikes/rust-diarize)。
 
 **int8 量化版反而更准**（严格 DER 1.07% vs fp32 1.53%），且 segmentation 模型从 5.7M 降到 1.5M —— 直接用 int8。
 
@@ -59,8 +65,11 @@ python der.py gt.rttm out.rttm --collar 0.25
   正确的结论表述是「同等难度下 sherpa 不劣于 pyannote」，**不是**「sherpa 在真实会议够用」。
 - 只测了 2 人。3 人以上、抢话重叠、混响串音全部未测 —— 与 U1（真实录音 fixture）合并验证。
 - 只测了 macOS arm64。
-- **未做 Rust 侧真实编译链接**，只确认了官方 example 与 crate 存在。首次接线时仍可能踩
-  构建/交叉编译的坑，建议在新项目 S0 收尾前跑通一个最小 Rust demo 再关闭这个未知。
+- ~~未做 Rust 侧真实编译链接~~ → **2026-08-11 已补做**，见
+  [mnemo/spikes/rust-diarize](https://github.com/libaoming/mnemo/tree/main/spikes/rust-diarize)。
+  输出与 Python 版逐字节相同，但踩到两个只有真编译才暴露的问题：预编译 dylib 不带 rpath
+  （`dyld: no LC_RPATH's found`），以及 onnxruntime 版本偏老导致更慢更大。**当初「只确认
+  crate 存在」的判断确实不够——这两个问题读文档永远碰不到。**
 
 ## 兜底方案（若真实场景翻车）
 
